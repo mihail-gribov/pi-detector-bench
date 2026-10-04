@@ -45,7 +45,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from pidbench.indirect_data import quadrat_pick
-from pidbench.models import load_models
+from pidbench.models import load_models, run_provenance
 from pidbench.runners import TransformersRunner
 
 logger = logging.getLogger(__name__)
@@ -326,13 +326,13 @@ def main() -> int:
         return 1
 
     # 2. Filter detectors by --runner (HF id) if provided.
-    models = load_models()
+    models = load_models(only=args.model)
     if args.runner:
         wanted = set(args.runner)
         models = [m for m in models if m.hf_id in wanted]
         if not models:
             logger.error("no model matched --runner. Known HF ids:")
-            for m in load_models():
+            for m in load_models(only=args.model):
                 logger.error("  %s", m.hf_id)
             return 1
 
@@ -349,6 +349,8 @@ def main() -> int:
         print(f"   loading {model_id} ...")
         try:
             runner = TransformersRunner(
+                chunk=args.chunk,
+                chunk_temperature=args.chunk_temperature,
                 model_id=model_id,
                 attack_label_id=attack_label,
                 max_length=512,
@@ -385,6 +387,7 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
+        "run": run_provenance(args),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "threshold": 0.5,
         "samples_per_dataset": {k: len(v) for k, v in datasets.items()},
@@ -465,6 +468,28 @@ def _parse_args() -> argparse.Namespace:
         "Default: run all models in models.yaml.",
     )
     p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument(
+        "--model",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="only score entries whose name or hf_id matches (substring or glob); "
+        "repeat for several. Default: every entry in models.yaml.",
+    )
+    p.add_argument(
+        "--chunk",
+        action="store_true",
+        help="score inputs longer than a model's window as overlapping windows "
+        "aggregated with smooth-max, instead of truncating. Applied to EVERY "
+        "model in the run, at each model's own window — never per-model. "
+        "Off by default so numbers stay comparable to published runs.",
+    )
+    p.add_argument(
+        "--chunk-temperature",
+        type=float,
+        default=0.1,
+        help="smooth-max temperature for --chunk (default 0.1 ~= max).",
+    )
     p.add_argument("--output", default="results/false_positives.json")
     p.add_argument(
         "--dump-scores",

@@ -29,7 +29,7 @@ from pathlib import Path
 
 from pidbench.benchmark_suite import SuiteRow, _run
 from pidbench.data import BENCHMARK_LOADERS
-from pidbench.models import load_models
+from pidbench.models import load_models, run_provenance
 from pidbench.runners import TransformersRunner
 
 logger = logging.getLogger(__name__)
@@ -69,12 +69,14 @@ def main() -> int:
         return 1
 
     rows: list[tuple[str, SuiteRow]] = []  # (bench_key, row)
-    for spec in load_models():
+    for spec in load_models(only=args.model):
         display, model_id, attack_label = spec.name, spec.hf_id, spec.attack_label
         logger.info("=" * 60)
         logger.info("loading %s (%s)", display, model_id)
         try:
             runner = TransformersRunner(
+                chunk=args.chunk,
+                chunk_temperature=args.chunk_temperature,
                 model_id=model_id,
                 attack_label_id=attack_label,
                 max_length=512,
@@ -110,7 +112,7 @@ def main() -> int:
     bench_order = [k for k, _ in bench_pairs]
 
     json_path = out_dir / "leaderboard.json"
-    _write_json(rows, json_path)
+    _write_json(rows, json_path, run_provenance(args))
     logger.info("wrote %s", json_path)
 
     md_path = out_dir / "leaderboard.md"
@@ -191,11 +193,12 @@ def _format_markdown(rows: list[tuple[str, SuiteRow]], bench_order: list[str]) -
     return "\n".join(lines) + "\n"
 
 
-def _write_json(rows: list[tuple[str, SuiteRow]], path: Path) -> None:
+def _write_json(rows: list[tuple[str, SuiteRow]], path: Path, run: dict | None = None) -> None:
     from dataclasses import asdict
 
     payload = {
         "schema_version": 1,
+        "run": run or {},
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "rows": [{"benchmark_key": key, **asdict(r)} for key, r in rows],
     }
@@ -215,6 +218,28 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument(
+        "--model",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="only score entries whose name or hf_id matches (substring or glob); "
+        "repeat for several. Default: every entry in models.yaml.",
+    )
+    p.add_argument(
+        "--chunk",
+        action="store_true",
+        help="score inputs longer than a model's window as overlapping windows "
+        "aggregated with smooth-max, instead of truncating. Applied to EVERY "
+        "model in the run, at each model's own window — never per-model. "
+        "Off by default so numbers stay comparable to published runs.",
+    )
+    p.add_argument(
+        "--chunk-temperature",
+        type=float,
+        default=0.1,
+        help="smooth-max temperature for --chunk (default 0.1 ~= max).",
+    )
     p.add_argument("--output-dir", default="results")
     p.add_argument(
         "--dump-scores",
