@@ -44,6 +44,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from pidbench.indirect_data import quadrat_pick
 from pidbench.models import load_models
 from pidbench.runners import TransformersRunner
 
@@ -188,16 +189,8 @@ def load_quadrat_clean(n: int, revision: str = _QUADRAT_REV) -> list[str] | None
         return None
     # Stratified by carrier rather than head-of-file: the release is written corpus by
     # corpus, so the first n rows would all be mail.
-    buckets: dict[str, list[str]] = {}
-    for row in ds:
-        buckets.setdefault(row.get("host_type") or "doc", []).append(row["text"])
-        if sum(len(v) for v in buckets.values()) >= n * 4:
-            break
-    out: list[str] = []
-    for i in range(n):
-        for key in sorted(buckets):
-            if i < len(buckets[key]) and len(out) < n:
-                out.append(buckets[key][i])
+    idx = quadrat_pick(ds["host_type"], n)
+    out: list[str] = ds.select(idx)["text"] if idx else []
     if not out:
         logger.warning("Quadrat-IPI returned 0 usable documents")
         return None

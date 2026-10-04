@@ -20,6 +20,7 @@ import glob
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 from functools import partial
@@ -355,6 +356,35 @@ def load_tensortrust(limit: int | None = None) -> EvalSet:
 # so the affected results have to be regenerated with it rather than alongside it.
 _QUADRAT_REPO = "mihailgribov/quadrat-ipi"
 _QUADRAT_REV = "v1.0.2"
+_QUADRAT_SEED = 0
+
+
+def quadrat_pick(
+    hosts: list[str | None], m: int, carrier: str | None = None, seed: int = _QUADRAT_SEED
+) -> list[int]:
+    """Row indices of a deterministic sample of m rows, equal shares per carrier.
+
+    The release is written corpus by corpus, so any head-of-file read returns one corpus.
+    The rows are shuffled with a fixed seed first (Python's own `random`, so the sample
+    depends only on the tag and the seed, not on the `datasets` version), then taken
+    round-robin over carriers so the shares stay equal whatever the seed.
+    """
+    order = list(range(len(hosts)))
+    random.Random(seed).shuffle(order)
+    buckets: dict[str, list[int]] = {}
+    for i in order:
+        key = hosts[i] or "doc"
+        if carrier and key != carrier:
+            continue
+        bucket = buckets.setdefault(key, [])
+        if len(bucket) < m:
+            bucket.append(i)
+    picked: list[int] = []
+    for i in range(m):
+        for key in sorted(buckets):
+            if i < len(buckets[key]) and len(picked) < m:
+                picked.append(buckets[key][i])
+    return picked
 
 
 def load_quadrat(
@@ -379,21 +409,8 @@ def load_quadrat(
 
     def take(split: str) -> list[str]:
         rows = ds[split]
-        # Deterministic and stratified by carrier: taking the head of the file would hand
-        # back one corpus, because the release is written corpus by corpus.
-        out: dict[str, list[str]] = {}
-        for r in rows:
-            if carrier and r.get("host_type") != carrier:
-                continue
-            out.setdefault(r.get("host_type") or "doc", []).append(r["text"])
-            if sum(len(v) for v in out.values()) >= m * 4:
-                break
-        picked: list[str] = []
-        for i in range(m):
-            for key in sorted(out):
-                if i < len(out[key]) and len(picked) < m:
-                    picked.append(out[key][i])
-        return picked
+        idx = quadrat_pick(rows["host_type"], m, carrier)
+        return rows.select(idx)["text"] if idx else []
 
     pos, neg = take("injected"), take("clean")
     if not pos or not neg:
