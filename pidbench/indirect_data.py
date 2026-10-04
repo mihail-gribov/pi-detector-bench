@@ -392,6 +392,9 @@ def load_quadrat(
 ) -> EvalSet:
     """carrier=None pools all three; or one of email/web/doc.
 
+    Mail rows carry real names and are flagged `pii` (a `no_pii` slice exists upstream for
+    runs through third-party APIs).
+
     revision defaults to the pinned tag; pass "main" to track the newest release instead.
     """
     m = limit or 400
